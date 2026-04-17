@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: auth-service
+
+  # PostgreSQL
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:auth_db}
+    username: ${DB_USERNAME:auth_user}
+    password: ${DB_PASSWORD:auth_pass}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 20000
+
+  # JPA
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  # Redis
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 4
+
+# JWT Configuration
+app:
+  jwt:
+    secret: ${JWT_SECRET:ThisIsADefaultDevSecretKeyThatShouldBeAtLeast256BitsLongForHS256}
+    expiration-ms: ${JWT_EXPIRATION_MS:3600000}  # 1 hour
+  admin:
+    email: ${ADMIN_EMAIL:admin@system.com}
+    password: ${ADMIN_PASSWORD:Admin@123}
+    name: ${ADMIN_NAME:System Admin}
+  password-reset:
+    expiration-ms: ${RESET_TOKEN_EXPIRATION_MS:900000}  # 15 minutes
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# Server
+server:
+  port: ${SERVER_PORT:8080}
+
+# Logging - structured JSON for production
+logging:
+  level:
+    com.ecommerce.auth: ${LOG_LEVEL:INFO}
+    org.springframework.security: WARN
