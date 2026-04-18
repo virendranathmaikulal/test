@@ -15,6 +15,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+
+import java.net.URI;
 
 @RestController
 @RequestMapping("/api/v1/user")
@@ -27,20 +30,29 @@ public class UserController {
     @PostMapping("/register")
     public ResponseEntity<ApiResponse<UserResponse>> register(@Valid @RequestBody RegisterRequest request) {
         UserResponse user = userService.register(request);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success("User registered successfully", user));
+
+        URI location = ServletUriComponentsBuilder
+                .fromCurrentContextPath()
+                .path("/api/v1/admin/users/{userId}")
+                .buildAndExpand(user.getUserId())
+                .toUri();
+
+        return ResponseEntity
+                .created(location)
+                .body(ApiResponse.success(HttpStatus.CREATED, "User registered successfully", user));
     }
 
     @PostMapping("/forgot_password")
     public ResponseEntity<ApiResponse<Void>> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
         passwordService.forgotPassword(request);
-        // Always return 200 — prevents email enumeration
-        return ResponseEntity.ok(ApiResponse.success("If the email exists, a reset link has been sent"));
+        return ResponseEntity.ok(
+                ApiResponse.success(HttpStatus.OK, "If the email exists, a reset link has been sent"));
     }
 
     @PostMapping("/reset_password")
     public ResponseEntity<ApiResponse<Void>> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         passwordService.resetPassword(request);
-        return ResponseEntity.ok(ApiResponse.success("Password reset successfully. Please login with your new password."));
+        return ResponseEntity.ok(
+                ApiResponse.success(HttpStatus.OK, "Password reset successfully. Please login with your new password."));
     }
 }

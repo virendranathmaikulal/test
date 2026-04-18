@@ -13,15 +13,15 @@ spring:
       idle-timeout: 300000
       connection-timeout: 20000
 
-  # JPA
+  # JPA — dialect auto-detected from JDBC URL in Hibernate 6+
   jpa:
     hibernate:
       ddl-auto: update
     show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
+    open-in-view: false  # Disable OSIV — prevents lazy loading in controllers (performance)
 
   # Redis
   data:
@@ -29,7 +29,7 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
-      timeout: 5000ms
+      timeout: 2000ms  # Connection timeout — fail fast for <50ms validation target
       lettuce:
         pool:
           max-active: 16
@@ -61,8 +61,20 @@ management:
 # Server
 server:
   port: ${SERVER_PORT:8080}
+  tomcat:
+    max-http-form-post-size: 1MB    # Limit form POST size
+    max-swallow-size: 1MB           # Limit request body swallow
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
 
-# Logging - structured JSON for production
+# Request body size limit
+spring.servlet.multipart:
+  max-file-size: 1MB
+  max-request-size: 1MB
+
+# Logging
 logging:
   level:
     com.ecommerce.auth: ${LOG_LEVEL:INFO}

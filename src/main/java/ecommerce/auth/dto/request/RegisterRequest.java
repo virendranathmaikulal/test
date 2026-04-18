@@ -28,6 +28,6 @@ public class RegisterRequest {
     )
     private String password;
 
-    // Optional: if provided as "SELLER", user gets both CUSTOMER + SELLER roles
+    @Pattern(regexp = "^(CUSTOMER|SELLER)?$", message = "Role must be either CUSTOMER or SELLER")
     private String role;
 }

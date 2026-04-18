@@ -10,43 +10,56 @@ import com.ecommerce.auth.repository.RoleRepository;
 import com.ecommerce.auth.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AdminService {
 
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final TokenService tokenService;
 
-    public List<UserResponse> getAllUsers() {
-        return userRepository.findAll().stream()
-                .map(UserResponse::from)
-                .collect(Collectors.toList());
+    @Transactional(readOnly = true)
+    public Page<UserResponse> getAllUsers(int page, int size) {
+        int safeSize = Math.min(size, MAX_PAGE_SIZE);
+        PageRequest pageRequest = PageRequest.of(page, safeSize, Sort.by("createdAt").descending());
+        return userRepository.findAll(pageRequest).map(UserResponse::adminView);
     }
 
+    @Transactional(readOnly = true)
     public UserResponse getUserById(UUID userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
-        return UserResponse.from(user);
+        User user = findUserOrThrow(userId);
+        return UserResponse.adminView(user);
+    }
+
+    /**
+     * Add role to user per BRD 5.7.3.
+     * DB write is transactional. Redis revocation is outside transaction.
+     */
+    public UserResponse addRoleToUser(UUID userId, String roleName) {
+        UserResponse response = addRoleTransactional(userId, roleName);
+
+        // Invalidate session outside transaction — new roles take effect on next login
+        tokenService.revokeToken(userId);
+
+        return response;
     }
 
     @Transactional
-    public UserResponse addRoleToUser(UUID userId, String roleName) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
-
+    protected UserResponse addRoleTransactional(UUID userId, String roleName) {
+        User user = findUserOrThrow(userId);
         RoleName roleEnum = parseRoleName(roleName);
-
-        Role role = roleRepository.findByRoleName(roleEnum)
-                .orElseThrow(() -> new ResourceNotFoundException("Role not found: " + roleName));
+        Role role = findRoleOrThrow(roleEnum);
 
         if (user.getRoles().contains(role)) {
             throw new BadRequestException("User already has role: " + roleName);
@@ -55,28 +68,32 @@ public class AdminService {
         user.getRoles().add(role);
         User saved = userRepository.save(user);
 
-        // Invalidate session so new roles take effect on next login (JWT embeds roles)
+        log.info("Role {} added to user {}", roleName, userId);
+        return UserResponse.adminView(saved);
+    }
+
+    /**
+     * Remove role from user per BRD 5.7.3.
+     * DB write is transactional. Redis revocation is outside transaction.
+     */
+    public UserResponse removeRoleFromUser(UUID userId, String roleName) {
+        UserResponse response = removeRoleTransactional(userId, roleName);
+
         tokenService.revokeToken(userId);
 
-        log.info("Role {} added to user {}", roleName, userId);
-        return UserResponse.from(saved);
+        return response;
     }
 
     @Transactional
-    public UserResponse removeRoleFromUser(UUID userId, String roleName) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
-
+    protected UserResponse removeRoleTransactional(UUID userId, String roleName) {
+        User user = findUserOrThrow(userId);
         RoleName roleEnum = parseRoleName(roleName);
-
-        Role role = roleRepository.findByRoleName(roleEnum)
-                .orElseThrow(() -> new ResourceNotFoundException("Role not found: " + roleName));
+        Role role = findRoleOrThrow(roleEnum);
 
         if (!user.getRoles().contains(role)) {
             throw new BadRequestException("User does not have role: " + roleName);
         }
 
-        // Prevent removing the last role
         if (user.getRoles().size() == 1) {
             throw new BadRequestException("Cannot remove the only role from a user");
         }
@@ -84,16 +101,19 @@ public class AdminService {
         user.getRoles().remove(role);
         User saved = userRepository.save(user);
 
-        tokenService.revokeToken(userId);
-
         log.info("Role {} removed from user {}", roleName, userId);
-        return UserResponse.from(saved);
+        return UserResponse.adminView(saved);
     }
 
     @Transactional
     public void unlockUser(UUID userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = findUserOrThrow(userId);
+
+        // Idempotent — skip DB write if already unlocked
+        if (!user.isAccountLocked()) {
+            log.info("Account already unlocked for user: {}", userId);
+            return;
+        }
 
         user.setAccountLocked(false);
         user.setFailedLoginAttempts(0);
@@ -103,9 +123,19 @@ public class AdminService {
         log.info("Account unlocked by admin for user: {}", userId);
     }
 
+    private User findUserOrThrow(UUID userId) {
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + userId));
+    }
+
+    private Role findRoleOrThrow(RoleName roleName) {
+        return roleRepository.findByRoleName(roleName)
+                .orElseThrow(() -> new ResourceNotFoundException("Role not found: " + roleName));
+    }
+
     private RoleName parseRoleName(String roleName) {
         try {
-            return RoleName.valueOf(roleName.toUpperCase());
+            return RoleName.valueOf(roleName.toUpperCase().trim());
         } catch (IllegalArgumentException e) {
             throw new BadRequestException("Invalid role: " + roleName + ". Valid roles: CUSTOMER, SELLER, ADMIN");
         }
