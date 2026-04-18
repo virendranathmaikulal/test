@@ -1,5 +1,6 @@
 package com.ecommerce.auth.entity;
 
+import com.ecommerce.auth.constants.AuthConstants;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -9,6 +10,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -36,7 +38,7 @@ public class User {
     private String passwordHash;
 
     @Column(nullable = false, length = 20)
-    private String status = "ACTIVE";
+    private String status = AuthConstants.STATUS_ACTIVE;
 
     @Column(name = "failed_login_attempts", nullable = false)
     private int failedLoginAttempts = 0;
@@ -62,4 +64,17 @@ public class User {
             inverseJoinColumns = @JoinColumn(name = "role_id")
     )
     private Set<Role> roles = new HashSet<>();
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        User user = (User) o;
+        return userId != null && userId.equals(user.userId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(userId);
+    }
 }
