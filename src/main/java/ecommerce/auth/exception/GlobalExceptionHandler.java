@@ -19,9 +19,21 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+/**
+ * Global exception handler — maps every domain exception to a precise HTTP status code.
+ * Ensures ALL error responses use the ApiResponse envelope format.
+ *
+ * Design: each exception type has its own handler with the correct HTTP semantics.
+ * The catch-all handler (Exception.class) logs the full stack trace for debugging
+ * but returns a generic message to the client (never expose internal details).
+ *
+ * Handler ordering doesn't matter — Spring matches by most specific exception type.
+ */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    // --- Domain exceptions (our custom exceptions) ---
 
     @ExceptionHandler(BadRequestException.class)
     public ResponseEntity<ApiResponse<Void>> handleBadRequest(BadRequestException ex) {
@@ -38,6 +50,7 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.UNAUTHORIZED, ex.getMessage());
     }
 
+    /** Same message for wrong email AND wrong password — anti-enumeration. */
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<ApiResponse<Void>> handleBadCredentials(BadCredentialsException ex) {
         return buildResponse(HttpStatus.UNAUTHORIZED, "Invalid email or password");
@@ -48,24 +61,31 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.FORBIDDEN, "Access denied: insufficient permissions");
     }
 
+    /** 423 LOCKED — semantically correct for locked accounts (not 403 which means "no permission"). */
     @ExceptionHandler(AccountLockedException.class)
     public ResponseEntity<ApiResponse<Void>> handleAccountLocked(AccountLockedException ex) {
         return buildResponse(HttpStatus.LOCKED, ex.getMessage());
     }
 
+    // --- Validation exceptions ---
+
+    /** 422 — request parsed OK but data is semantically invalid (not 400 which means "can't parse"). */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> errors = ex.getBindingResult().getFieldErrors().stream()
                 .collect(Collectors.toMap(
                         FieldError::getField,
                         fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value",
-                        (a, b) -> a
+                        (a, b) -> a // Keep first error if field has multiple violations
                 ));
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(
                 ApiResponse.error(HttpStatus.UNPROCESSABLE_ENTITY, "Validation failed", errors)
         );
     }
 
+    // --- HTTP/framework exceptions ---
+
+    /** Malformed JSON body — Jackson can't deserialize. */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Void>> handleMalformedJson(HttpMessageNotReadableException ex) {
         return buildResponse(HttpStatus.BAD_REQUEST, "Malformed JSON request body");
@@ -81,11 +101,7 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, "Missing required header: " + ex.getHeaderName());
     }
 
-    @ExceptionHandler(NoResourceFoundException.class)
-    public ResponseEntity<ApiResponse<Void>> handleNoResource(NoResourceFoundException ex) {
-        return buildResponse(HttpStatus.NOT_FOUND, "Endpoint not found");
-    }
-
+    /** Invalid path variable type — e.g., /users/not-a-uuid when UUID expected. */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
         String message = String.format("Invalid value '%s' for parameter '%s'. Expected type: %s",
@@ -94,12 +110,20 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, message);
     }
 
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(NoResourceFoundException ex) {
+        return buildResponse(HttpStatus.NOT_FOUND, "Endpoint not found");
+    }
+
+    // --- Catch-all — logs full stack trace, returns generic message (never expose internals) ---
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGeneral(Exception ex) {
         log.error("Unhandled exception: {}", ex.getMessage(), ex);
         return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
     }
 
+    /** DRY helper — all error responses built the same way. */
     private ResponseEntity<ApiResponse<Void>> buildResponse(HttpStatus status, String message) {
         return ResponseEntity.status(status).body(ApiResponse.error(status, message));
     }
