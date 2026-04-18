@@ -1,4 +1,3 @@
-
 package com.ecommerce.auth.config;
 
 import com.ecommerce.auth.entity.Role;
@@ -15,6 +14,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Set;
 
 @Slf4j
@@ -36,13 +36,17 @@ public class DataInitializer implements CommandLineRunner {
     private String adminName;
 
     @Override
-    @Transactional
     public void run(String... args) {
         initRoles();
         initAdminUser();
     }
 
-    private void initRoles() {
+    /**
+     * Seed all roles defined in RoleName enum.
+     * Separate transaction — role creation persists even if admin creation fails.
+     */
+    @Transactional
+    protected void initRoles() {
         Arrays.stream(RoleName.values()).forEach(roleName -> {
             if (roleRepository.findByRoleName(roleName).isEmpty()) {
                 roleRepository.save(new Role(roleName));
@@ -51,22 +55,41 @@ public class DataInitializer implements CommandLineRunner {
         });
     }
 
-    private void initAdminUser() {
+    /**
+     * Create default admin user per BRD 5.7.2:
+     * - System checks whether an Admin user exists
+     * - If no Admin exists, create one with configured credentials
+     * - Admin gets all roles (full system privileges)
+     */
+    @Transactional
+    protected void initAdminUser() {
         if (userRepository.findByEmail(adminEmail).isPresent()) {
             log.info("Admin user already exists, skipping creation");
             return;
         }
 
-        Role adminRole = roleRepository.findByRoleName(RoleName.ADMIN)
-                .orElseThrow(() -> new RuntimeException("ADMIN role not found"));
+        // Validate admin password meets minimum security requirements
+        if (adminPassword == null || adminPassword.length() < 8) {
+            throw new IllegalStateException(
+                    "Admin password must be at least 8 characters. Set ADMIN_PASSWORD environment variable.");
+        }
+
+        // Admin gets all roles — full system privileges per BRD 5.7.2
+        Set<Role> adminRoles = new HashSet<>();
+        for (RoleName roleName : RoleName.values()) {
+            Role role = roleRepository.findByRoleName(roleName)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Role " + roleName + " not found. Ensure initRoles() ran successfully."));
+            adminRoles.add(role);
+        }
 
         User admin = new User();
         admin.setName(adminName);
-        admin.setEmail(adminEmail);
+        admin.setEmail(adminEmail.toLowerCase().trim());
         admin.setPasswordHash(passwordEncoder.encode(adminPassword));
-        admin.setRoles(Set.of(adminRole));
+        admin.setRoles(adminRoles);
 
         userRepository.save(admin);
-        log.info("Default admin user created with email: {}", adminEmail);
+        log.info("Default admin user created with email: {} and roles: {}", adminEmail, adminRoles.size());
     }
 }
