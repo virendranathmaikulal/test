@@ -50,7 +50,7 @@ public class AdminService {
         UserResponse response = addRoleTransactional(userId, roleName);
 
         // Invalidate session outside transaction — new roles take effect on next login
-        tokenService.revokeToken(userId);
+        tokenService.revokeAllTokens(userId);
 
         return response;
     }
@@ -79,7 +79,7 @@ public class AdminService {
     public UserResponse removeRoleFromUser(UUID userId, String roleName) {
         UserResponse response = removeRoleTransactional(userId, roleName);
 
-        tokenService.revokeToken(userId);
+        tokenService.revokeAllTokens(userId);
 
         return response;
     }
