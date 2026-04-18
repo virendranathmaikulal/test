@@ -1,5 +1,7 @@
 package com.ecommerce.auth.dto.response;
 
+import com.ecommerce.auth.constants.AuthConstants;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -7,10 +9,13 @@ import lombok.Getter;
 @Builder
 public class LoginResponse {
 
+    @JsonProperty("access_token")
     private String accessToken;
 
+    @JsonProperty("token_type")
     @Builder.Default
-    private String tokenType = "Bearer";
+    private String tokenType = AuthConstants.TOKEN_TYPE_BEARER;
 
-    private long expiresIn;
+    @JsonProperty("expires_in")
+    private long expiresIn; // seconds
 }
