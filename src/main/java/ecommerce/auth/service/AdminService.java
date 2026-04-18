@@ -18,17 +18,31 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
+/**
+ * Admin operations — user management and role assignment (BRD 5.7.3, 5.7.6).
+ *
+ * Design decisions:
+ * - readOnly=true on reads — Hibernate skips dirty checking (performance on paginated lists).
+ * - DB writes and Redis revocation are separated — different failure domains.
+ *   If Redis fails after role change, the DB change persists (correct behavior).
+ * - Token revocation after role change — forces re-login so new JWT has updated roles.
+ *   Without this, the old JWT still has stale roles until it expires.
+ * - Pagination on user list — prevents OOM with 10K+ users. Max page size capped at 100.
+ * - Uses UserResponse.adminView() — includes status, lock state, failed attempts.
+ *   Regular users see UserResponse.from() which excludes these fields.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AdminService {
 
-    private static final int MAX_PAGE_SIZE = 100;
+    private static final int MAX_PAGE_SIZE = 100; // Prevents ?size=999999 from loading entire DB
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final TokenService tokenService;
 
+    /** Paginated user list — sorted by newest first. readOnly skips Hibernate dirty checking. */
     @Transactional(readOnly = true)
     public Page<UserResponse> getAllUsers(int page, int size) {
         int safeSize = Math.min(size, MAX_PAGE_SIZE);
@@ -43,15 +57,13 @@ public class AdminService {
     }
 
     /**
-     * Add role to user per BRD 5.7.3.
-     * DB write is transactional. Redis revocation is outside transaction.
+     * Add role — DB write in separate @Transactional, Redis revocation outside.
+     * Why revoke token? JWT embeds roles at generation time. Role change doesn't
+     * take effect until user gets a new JWT (re-login or refresh).
      */
     public UserResponse addRoleToUser(UUID userId, String roleName) {
         UserResponse response = addRoleTransactional(userId, roleName);
-
-        // Invalidate session outside transaction — new roles take effect on next login
-        tokenService.revokeAllTokens(userId);
-
+        tokenService.revokeAllTokens(userId); // Force re-login for fresh roles
         return response;
     }
 
@@ -67,20 +79,14 @@ public class AdminService {
 
         user.getRoles().add(role);
         User saved = userRepository.save(user);
-
         log.info("Role {} added to user {}", roleName, userId);
         return UserResponse.adminView(saved);
     }
 
-    /**
-     * Remove role from user per BRD 5.7.3.
-     * DB write is transactional. Redis revocation is outside transaction.
-     */
+    /** Remove role — prevents removing the last role (user with 0 roles = broken state). */
     public UserResponse removeRoleFromUser(UUID userId, String roleName) {
         UserResponse response = removeRoleTransactional(userId, roleName);
-
         tokenService.revokeAllTokens(userId);
-
         return response;
     }
 
@@ -93,35 +99,32 @@ public class AdminService {
         if (!user.getRoles().contains(role)) {
             throw new BadRequestException("User does not have role: " + roleName);
         }
-
         if (user.getRoles().size() == 1) {
             throw new BadRequestException("Cannot remove the only role from a user");
         }
 
         user.getRoles().remove(role);
         User saved = userRepository.save(user);
-
         log.info("Role {} removed from user {}", roleName, userId);
         return UserResponse.adminView(saved);
     }
 
+    /** Idempotent unlock — skips DB write if already unlocked. No unnecessary writes. */
     @Transactional
     public void unlockUser(UUID userId) {
         User user = findUserOrThrow(userId);
-
-        // Idempotent — skip DB write if already unlocked
         if (!user.isAccountLocked()) {
             log.info("Account already unlocked for user: {}", userId);
             return;
         }
-
         user.setAccountLocked(false);
         user.setFailedLoginAttempts(0);
         user.setLockedAt(null);
         userRepository.save(user);
-
         log.info("Account unlocked by admin for user: {}", userId);
     }
+
+    // --- Shared helpers — DRY principle, consistent error messages ---
 
     private User findUserOrThrow(UUID userId) {
         return userRepository.findById(userId)
@@ -133,6 +136,7 @@ public class AdminService {
                 .orElseThrow(() -> new ResourceNotFoundException("Role not found: " + roleName));
     }
 
+    /** Parse string to enum — fails fast with 400 instead of letting invalid values reach the DB. */
     private RoleName parseRoleName(String roleName) {
         try {
             return RoleName.valueOf(roleName.toUpperCase().trim());

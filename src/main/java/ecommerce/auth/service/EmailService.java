@@ -1,9 +1,12 @@
 package com.ecommerce.auth.service;
 
 /**
- * Abstraction for sending emails.
+ * Email abstraction — Dependency Inversion Principle (SOLID).
+ * PasswordService depends on this interface, not a concrete implementation.
+ *
  * POC: ConsoleEmailService (logs to console).
- * Production: swap with SesEmailService, SendGridEmailService, etc.
+ * Production: Create SesEmailService or SendGridEmailService implementing this interface,
+ *             annotate with @Service and @Primary — zero changes to PasswordService.
  */
 public interface EmailService {
 
