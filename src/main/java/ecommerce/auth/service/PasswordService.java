@@ -22,11 +22,12 @@ import java.util.UUID;
 public class PasswordService {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-    private static final int RESET_TOKEN_BYTES = 32; // 256 bits of entropy
+    private static final int RESET_TOKEN_BYTES = 32;
 
     private final UserRepository userRepository;
     private final TokenService tokenService;
     private final PasswordEncoder passwordEncoder;
+    private final EmailService emailService;
 
     @Value("${app.password-reset.expiration-ms}")
     private long resetTokenExpirationMs;
@@ -36,7 +37,7 @@ public class PasswordService {
      * 1. User provides registered email
      * 2. System generates password reset token
      * 3. Token stored in Redis with expiration
-     * 4. Token sent to user via email (POC: logged at DEBUG)
+     * 4. Token sent to user via email
      *
      * Always returns success to prevent email enumeration attacks.
      */
@@ -44,19 +45,12 @@ public class PasswordService {
         String email = request.getEmail().toLowerCase().trim();
 
         userRepository.findByEmail(email).ifPresent(user -> {
-            // Generate cryptographically secure token (URL-safe base64, 256 bits)
             String resetToken = generateSecureToken();
             tokenService.storeResetToken(resetToken, user.getUserId(), resetTokenExpirationMs);
 
-            // POC: log at DEBUG (never INFO in production — tokens in logs = security risk)
-            // Production: send via email service (SES/SendGrid)
-            log.debug("Password reset token generated for user: {}", user.getUserId());
-            log.debug("Reset token: {}", resetToken);
-
-            // This is the POC console output — remove in production
-            System.out.println("=== PASSWORD RESET TOKEN for " + email + " ===");
-            System.out.println(resetToken);
-            System.out.println("=== TOKEN EXPIRES IN " + (resetTokenExpirationMs / 60000) + " MINUTES ===");
+            // Step 4: Send email (BRD 5.5)
+            long expirationMinutes = resetTokenExpirationMs / 60000;
+            emailService.sendPasswordResetEmail(email, resetToken, expirationMinutes);
         });
 
         // Always log the same message regardless of whether user exists
@@ -65,26 +59,20 @@ public class PasswordService {
 
     /**
      * Reset password per BRD 5.6:
-     * 1. Validate reset token
-     * 2. Verify token in Redis
-     * 3. Update password
-     * 4. Invalidate reset token
-     *
-     * Additional: unlock account + invalidate session (per updated requirements).
+     * 1. Validate reset token in Redis
+     * 2. Update password + unlock account (DB transaction)
+     * 3. Cleanup Redis tokens
      */
     public void resetPassword(ResetPasswordRequest request) {
-        // Step 1-2: Validate reset token in Redis
         UUID userId = tokenService.validateResetToken(request.getResetToken());
         if (userId == null) {
             throw new BadRequestException("Invalid or expired reset token");
         }
 
-        // Step 3: Update password + unlock account (DB transaction)
         updatePasswordAndUnlock(userId, request.getNewPassword());
 
-        // Step 4: Cleanup Redis (outside transaction — Redis failure shouldn't roll back password change)
         tokenService.deleteResetToken(request.getResetToken());
-        tokenService.revokeToken(userId);
+        tokenService.revokeAllTokens(userId);
 
         log.info("Password reset and account unlocked for user: {}", userId);
     }
@@ -105,10 +93,6 @@ public class PasswordService {
         userRepository.save(user);
     }
 
-    /**
-     * Generates a URL-safe base64 token with 256 bits of entropy.
-     * More secure than UUID (122 bits) and no dashes that need URL encoding.
-     */
     private String generateSecureToken() {
         byte[] bytes = new byte[RESET_TOKEN_BYTES];
         SECURE_RANDOM.nextBytes(bytes);

@@ -2,6 +2,7 @@ package com.ecommerce.auth.controller;
 
 import com.ecommerce.auth.constants.AuthConstants;
 import com.ecommerce.auth.dto.request.LoginRequest;
+import com.ecommerce.auth.dto.request.RefreshTokenRequest;
 import com.ecommerce.auth.dto.response.ApiResponse;
 import com.ecommerce.auth.dto.response.LoginResponse;
 import com.ecommerce.auth.dto.response.TokenValidationResponse;
@@ -37,30 +38,29 @@ public class AuthController {
     }
 
     /**
-     * Logout per BRD 5.3:
-     * - Extract JWT from request
-     * - Remove token from Redis
-     * - Session is invalidated
-     *
-     * Uses @AuthenticationPrincipal to get userId from SecurityContext
-     * (already parsed and validated by JwtAuthenticationFilter — no re-parse needed).
+     * Refresh token endpoint.
+     * Client sends expired access token scenario: use refresh token to get new pair.
+     * Public endpoint — access token may be expired, so can't require authentication.
      */
+    @PostMapping("/auth/refresh")
+    public ResponseEntity<ApiResponse<LoginResponse>> refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        LoginResponse response = authService.refresh(request);
+        return ResponseEntity.ok(ApiResponse.success(HttpStatus.OK, "Token refreshed successfully", response));
+    }
+
     @PostMapping("/logout")
-    public ResponseEntity<ApiResponse<Void>> logout(@AuthenticationPrincipal UUID userId) {
-        authService.logout(userId);
+    public ResponseEntity<ApiResponse<Void>> logout(
+            @AuthenticationPrincipal UUID userId,
+            @RequestBody(required = false) RefreshTokenRequest request) {
+        String refreshToken = (request != null) ? request.getRefreshToken() : null;
+        authService.logout(userId, refreshToken);
         return ResponseEntity.ok(ApiResponse.success(HttpStatus.OK, "Logged out successfully"));
     }
 
-    /**
-     * Token validation endpoint for downstream microservices (BRD 5.4).
-     * Other services call this to verify a user's token without needing the JWT secret.
-     * Single-parse approach for performance.
-     */
     @GetMapping("/auth/validate")
     public ResponseEntity<ApiResponse<TokenValidationResponse>> validateToken(HttpServletRequest request) {
         String token = extractTokenOrThrow(request);
 
-        // Single parse — signature + expiration check
         Claims claims = jwtProvider.parseTokenSafe(token);
         if (claims == null) {
             return ResponseEntity.ok(ApiResponse.success(HttpStatus.OK, "Token invalid",
@@ -69,7 +69,6 @@ public class AuthController {
 
         UUID userId = jwtProvider.getUserIdFromClaims(claims);
 
-        // Redis revocation check
         if (!tokenService.isTokenValid(userId, token)) {
             return ResponseEntity.ok(ApiResponse.success(HttpStatus.OK, "Token revoked",
                     TokenValidationResponse.builder().valid(false).build()));
